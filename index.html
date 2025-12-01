@@ -457,6 +457,16 @@
         waspNode.connect(outputGain);
         outputGain.connect(audioContext.destination);
         
+        // DEBUG: Also connect oscillator directly to hear if it works
+        // Comment this out once filter is working
+        const testGain = audioContext.createGain();
+        testGain.gain.value = 0; // Set to 0.1 to test direct oscillator
+        oscillator.connect(testGain);
+        testGain.connect(audioContext.destination);
+        console.log('Test gain node added - set testGain.gain.value = 0.1 in console to hear oscillator directly');
+        window.testGain = testGain; // expose for console testing
+        window.waspNode = waspNode; // expose for debugging
+        
         console.log('Audio graph connected');
         
         // Set initial parameters
