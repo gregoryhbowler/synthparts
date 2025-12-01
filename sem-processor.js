@@ -1,15 +1,13 @@
 /**
  * SEM Filter AudioWorklet Processor
  * 
- * A highly accurate emulation of the Oberheim SEM state-variable filter
- * featuring:
+ * Highly accurate emulation of the Oberheim SEM state-variable filter:
  * - TPT/ZDF (Topology Preserving Transform / Zero Delay Feedback) SVF core
  * - OTA saturation modeling (CA3080-style tanh nonlinearity)
  * - Resonance-as-damping behavior (authentic SEM Q response)
  * - No gain normalization (natural loudness bloom with resonance)
  * - 2x/4x oversampling with polyphase halfband decimation
  * - Per-instance analog drift (Tier 3 accuracy)
- * - Asymmetric nonlinearities for device mismatch
  */
 
 class SEMFilterProcessor extends AudioWorkletProcessor {
@@ -56,44 +54,35 @@ class SEMFilterProcessor extends AudioWorkletProcessor {
   constructor(options) {
     super();
     
-    // State variables for the SVF (per channel, we'll do stereo)
-    this.s1 = [0, 0]; // LP integrator state
-    this.s2 = [0, 0]; // BP integrator state
-    
-    // Oversampling buffers
-    this.oversampleBuffer = new Float32Array(128 * 4);
-    this.decimateBuffer = new Float32Array(128 * 4);
+    // State variables for the SVF (per channel, stereo)
+    this.ic1eq = [0, 0]; // Integrator 1 state
+    this.ic2eq = [0, 0]; // Integrator 2 state
     
     // Halfband filter states for decimation (per channel)
     this.halfbandState1 = [new Float32Array(12), new Float32Array(12)];
     this.halfbandState2 = [new Float32Array(12), new Float32Array(12)];
     
     // === TIER 3: Per-instance analog drift ===
-    // Seeded random for reproducible "character"
     const seed = options?.processorOptions?.seed ?? Math.random() * 10000;
     this.rng = this.createRNG(seed);
     
     // Component tolerances (±5% typical for vintage gear)
-    this.cutoffDrift = 1 + (this.rng() - 0.5) * 0.1;      // ±5% cutoff scaling
-    this.resDrift = 1 + (this.rng() - 0.5) * 0.08;        // ±4% Q scaling  
-    this.cap1Drift = 1 + (this.rng() - 0.5) * 0.06;       // ±3% integrator 1
-    this.cap2Drift = 1 + (this.rng() - 0.5) * 0.06;       // ±3% integrator 2
+    this.cutoffDrift = 1 + (this.rng() - 0.5) * 0.10;
+    this.resDrift = 1 + (this.rng() - 0.5) * 0.08;
+    this.capDrift1 = 1 + (this.rng() - 0.5) * 0.06;
+    this.capDrift2 = 1 + (this.rng() - 0.5) * 0.06;
     
-    // Asymmetric nonlinearity (OTA mismatch)
-    this.tanhAsymmetry1 = 1 + (this.rng() - 0.5) * 0.04;  // Slight positive/negative asymmetry
-    this.tanhAsymmetry2 = 1 + (this.rng() - 0.5) * 0.04;
-    this.tanhBias1 = (this.rng() - 0.5) * 0.02;           // DC offset from mismatch
-    this.tanhBias2 = (this.rng() - 0.5) * 0.02;
+    // Asymmetric nonlinearity coefficients
+    this.saturationAmount = 0.8 + this.rng() * 0.4; // How hard the OTAs clip
+    this.asymmetry = 1 + (this.rng() - 0.5) * 0.1;
     
-    // Store sample rate
-    this.sampleRate = sampleRate;
+    // Tiny DC offset from component mismatch
+    this.dcOffset = (this.rng() - 0.5) * 0.001;
     
-    // Precompute constants
-    this.pi = Math.PI;
-    this.twoPi = 2 * Math.PI;
+    // Denormal threshold
+    this.denormalThreshold = 1e-18;
   }
   
-  // Simple seeded RNG (Mulberry32)
   createRNG(seed) {
     return function() {
       let t = seed += 0x6D2B79F5;
@@ -103,161 +92,152 @@ class SEMFilterProcessor extends AudioWorkletProcessor {
     };
   }
   
-  // === OTA Saturation Model ===
-  // Asymmetric tanh to model CA3080 transfer curve with device mismatch
-  otaSaturate(x, asymmetry, bias) {
-    // Add slight bias (DC offset from component mismatch)
-    x += bias;
-    
-    // Asymmetric tanh: different slopes for positive/negative
-    if (x >= 0) {
-      return Math.tanh(x * asymmetry);
-    } else {
-      return Math.tanh(x / asymmetry);
-    }
-  }
-  
-  // Fast tanh approximation for when we need speed
-  // Pade approximant, accurate to ~0.1%
-  fastTanh(x) {
+  // Fast tanh approximation (Pade approximant)
+  tanh(x) {
     if (x < -3) return -1;
     if (x > 3) return 1;
     const x2 = x * x;
     return x * (27 + x2) / (27 + 9 * x2);
   }
   
-  // === Halfband filter for decimation ===
-  // 12-tap halfband FIR (optimized - every other coefficient is 0)
-  // Coefficients designed for ~80dB stopband rejection
+  // Soft saturation with asymmetry (models OTA mismatch)
+  saturate(x, amount, asymmetry) {
+    const scaled = x * amount;
+    if (scaled >= 0) {
+      return this.tanh(scaled * asymmetry) / amount;
+    } else {
+      return this.tanh(scaled / asymmetry) / amount;
+    }
+  }
+  
+  // Kill denormals
+  flushDenormal(x) {
+    return (x > this.denormalThreshold || x < -this.denormalThreshold) ? x : 0;
+  }
+  
+  // Halfband decimation filter
   halfbandDecimate(input, state, len) {
-    const coeffs = [
-      0.00320982,  // h[0]
-      -0.01442291, // h[2]  
-      0.04299436,  // h[4]
-      -0.09939089, // h[6]
-      0.31546250,  // h[8]
-      0.50000000,  // h[10] - center tap
-      0.31546250,  // h[12]
-      -0.09939089, // h[14]
-      0.04299436,  // h[16]
-      -0.01442291, // h[18]
-      0.00320982   // h[20]
+    // Optimized 11-tap halfband FIR
+    const h = [
+      0.00320982, -0.01442291, 0.04299436, -0.09939089, 
+      0.31546250, 0.50000000, 0.31546250, -0.09939089, 
+      0.04299436, -0.01442291, 0.00320982
     ];
     
-    const output = new Float32Array(len / 2);
+    const output = new Float32Array(len >> 1);
     
     for (let i = 0; i < len; i += 2) {
-      // Shift in new samples
+      // Shift state
       for (let j = state.length - 1; j >= 2; j--) {
         state[j] = state[j - 2];
       }
       state[1] = input[i + 1];
       state[0] = input[i];
       
-      // Convolve (only at even positions for decimation)
+      // Convolve
       let sum = 0;
-      for (let j = 0; j < coeffs.length; j++) {
-        sum += coeffs[j] * state[j];
+      for (let j = 0; j < h.length; j++) {
+        sum += h[j] * state[j];
       }
-      output[i / 2] = sum;
+      output[i >> 1] = sum;
     }
     
     return output;
   }
   
-  // === Linear interpolation upsampler ===
+  // Linear interpolation upsample
   upsample2x(input, output, len) {
     for (let i = 0; i < len; i++) {
-      output[i * 2] = input[i];
-      output[i * 2 + 1] = i < len - 1 
+      output[i << 1] = input[i];
+      output[(i << 1) + 1] = (i < len - 1) 
         ? (input[i] + input[i + 1]) * 0.5 
         : input[i];
     }
   }
   
-  // === Core SVF with OTA saturation ===
-  processSVF(input, cutoffHz, resonance, morph, drive, channel, oversampleFactor) {
-    const sr = this.sampleRate * oversampleFactor;
+  // === Core TPT SVF ===
+  processSample(x, cutoffHz, resonance, morph, drive, channel, sr) {
+    // Apply component drift to cutoff
+    const fc = cutoffHz * this.cutoffDrift;
     
-    // Apply per-instance drift to cutoff
-    const driftedCutoff = cutoffHz * this.cutoffDrift;
+    // Prewarp for trapezoidal integration
+    // Clamp to just under Nyquist to prevent instability
+    const g = Math.tan(Math.PI * Math.min(fc / sr, 0.49));
     
-    // Prewarp cutoff for trapezoidal integration (bilinear transform)
-    const g = Math.tan(this.pi * Math.min(driftedCutoff / sr, 0.499));
-    
-    // Apply drift to integrator time constants (simulates cap tolerance)
-    const g1 = g * this.cap1Drift;
-    const g2 = g * this.cap2Drift;
+    // Apply cap drift to integrator time constants
+    const g1 = g * this.capDrift1;
+    const g2 = g * this.capDrift2;
     
     // === SEM Resonance Model ===
-    // The SEM's resonance control *adds damping* to a naturally resonant system
-    // At resonance=0, we want maximum resonance (minimum damping)
-    // At resonance=1, we want minimum resonance (maximum damping)
-    // We also apply the per-instance Q drift
+    // Resonance control adds damping to naturally resonant system
+    // resonance=0: near self-oscillation (k≈0)
+    // resonance=1: heavily damped (k=2, Q=0.5)
+    const kMin = 0.02; // Just shy of self-oscillation
+    const kMax = 2.0;
+    const k = (kMin + resonance * (kMax - kMin)) * this.resDrift;
     
-    // Map 0-1 to damping coefficient
-    // k = 2 gives Q=0.5 (no resonance), k = 0 gives infinite Q (self-oscillation)
-    // SEM doesn't quite self-oscillate, so we clamp minimum k
-    const baseDamping = 0.05; // Minimum damping (maximum resonance)
-    const maxDamping = 2.0;   // Maximum damping (no resonance)
-    const k = (baseDamping + resonance * (maxDamping - baseDamping)) * this.resDrift;
+    // === Input stage ===
+    // Pre-filter saturation (mixer/input amp clipping)
+    x = x * drive;
+    x = this.saturate(x, this.saturationAmount, this.asymmetry);
     
-    // === Input drive (pre-filter saturation) ===
-    let x = input * drive;
+    // Add tiny DC offset (component mismatch)
+    x += this.dcOffset;
     
-    // Soft clip input to model mixer saturation feeding the filter
-    x = this.fastTanh(x * 0.5) * 2;
+    // Get integrator states
+    let s1 = this.ic1eq[channel];
+    let s2 = this.ic2eq[channel];
     
-    // === TPT SVF Core with OTA Saturation ===
-    // This implements the zero-delay feedback SVF topology
-    // with nonlinearities at the integrator inputs
+    // === TPT State Variable Filter ===
+    // Using the Zavalishin/Cytomic form
+    // 
+    // The key insight: solve for HP first, then cascade
+    // This gives us zero-delay feedback behavior
     
-    // Get state
-    let s1 = this.s1[channel];
-    let s2 = this.s2[channel];
+    const gk = g1 * k;
+    const g1g2 = g1 * g2;
+    const denom = 1 / (1 + gk + g1g2);
     
-    // Compute intermediate values with saturation
-    // The key insight: OTA integrators saturate their input differential current
+    // Solve for highpass output
+    const hp = (x - (k + g1) * s1 - s2) * denom;
     
-    // HP output (solved from the system)
-    const hp = (x - (k + g1) * s1 - s2) / (1 + g1 * (k + g2) + g1);
+    // Bandpass: first integrator output
+    const v1 = g1 * hp;
+    const bp = v1 + s1;
     
-    // BP input with saturation (this is where the OTA magic happens)
-    const bp_in = this.otaSaturate(hp + s1, this.tanhAsymmetry1, this.tanhBias1);
+    // Lowpass: second integrator output  
+    const v2 = g2 * bp;
+    const lp = v2 + s2;
     
-    // BP output
-    const bp = g1 * bp_in + s1;
+    // === OTA Saturation ===
+    // Apply saturation to integrator outputs (models OTA limiting)
+    const bpSat = this.saturate(bp, this.saturationAmount * 0.7, this.asymmetry);
+    const lpSat = this.saturate(lp, this.saturationAmount * 0.7, this.asymmetry);
     
-    // LP input with saturation
-    const lp_in = this.otaSaturate(bp + s2, this.tanhAsymmetry2, this.tanhBias2);
+    // Update integrator states (trapezoidal rule)
+    // Mix saturated and clean for subtle effect
+    const satMix = 0.3;
+    this.ic1eq[channel] = this.flushDenormal(
+      v1 + bp * (1 - satMix) + bpSat * satMix
+    );
+    this.ic2eq[channel] = this.flushDenormal(
+      v2 + lp * (1 - satMix) + lpSat * satMix
+    );
     
-    // LP output  
-    const lp = g2 * lp_in + s2;
-    
-    // Update state (trapezoidal integration)
-    this.s1[channel] = 2 * bp - s1;
-    this.s2[channel] = 2 * lp - s2;
-    
-    // === Output mixing (SEM morph control) ===
-    // morph: -1 = LP, 0 = notch (LP+HP), 1 = HP
-    // The SEM's mode control crossfades between these
-    
+    // === Output Mixing (SEM morph control) ===
+    // morph: -1 = LP, 0 = Notch (LP+HP), +1 = HP
     let output;
     if (morph <= 0) {
-      // LP to Notch: mix LP with HP
-      const notchMix = -morph; // 0 at morph=0, 1 at morph=-1 (but inverted)
-      // Actually: at morph=-1, full LP. At morph=0, notch (LP+HP)
-      const t = morph + 1; // 0 = full LP, 1 = notch
+      // LP to Notch crossfade
+      const t = morph + 1; // 0 = LP, 1 = Notch
       output = lp * (1 - t) + (lp + hp) * t;
     } else {
-      // Notch to HP
-      const t = morph; // 0 = notch, 1 = full HP
+      // Notch to HP crossfade
+      const t = morph; // 0 = Notch, 1 = HP
       output = (lp + hp) * (1 - t) + hp * t;
     }
     
-    // Note: We deliberately don't normalize gain here
-    // The SEM's loudness bloom with resonance is part of its character
-    
+    // No gain compensation - loudness bloom is part of SEM character
     return output;
   }
 
@@ -269,75 +249,80 @@ class SEMFilterProcessor extends AudioWorkletProcessor {
     
     const blockSize = input[0].length;
     
-    // Get oversample factor (quantize to 1, 2, or 4)
-    let oversampleFactor = Math.round(parameters.oversample[0]);
-    if (oversampleFactor < 1) oversampleFactor = 1;
-    if (oversampleFactor > 4) oversampleFactor = 4;
-    if (oversampleFactor === 3) oversampleFactor = 2; // Only 1, 2, 4 supported
+    // Get oversample factor (1, 2, or 4)
+    let osf = Math.round(parameters.oversample[0]);
+    if (osf < 1) osf = 1;
+    if (osf === 3) osf = 2;
+    if (osf > 4) osf = 4;
+    
+    const baseSR = sampleRate;
     
     // Process each channel
-    for (let ch = 0; ch < Math.min(input.length, output.length); ch++) {
-      const inputChannel = input[ch];
-      const outputChannel = output[ch];
+    const numChannels = Math.min(input.length, output.length);
+    
+    for (let ch = 0; ch < numChannels; ch++) {
+      const inCh = input[ch];
+      const outCh = output[ch];
       
-      if (oversampleFactor === 1) {
-        // No oversampling - direct processing
+      if (osf === 1) {
+        // No oversampling
         for (let i = 0; i < blockSize; i++) {
           const cutoff = parameters.cutoff.length > 1 ? parameters.cutoff[i] : parameters.cutoff[0];
-          const resonance = parameters.resonance.length > 1 ? parameters.resonance[i] : parameters.resonance[0];
+          const res = parameters.resonance.length > 1 ? parameters.resonance[i] : parameters.resonance[0];
           const morph = parameters.morph.length > 1 ? parameters.morph[i] : parameters.morph[0];
           const drive = parameters.drive.length > 1 ? parameters.drive[i] : parameters.drive[0];
           
-          outputChannel[i] = this.processSVF(inputChannel[i], cutoff, resonance, morph, drive, ch, 1);
+          outCh[i] = this.processSample(inCh[i], cutoff, res, morph, drive, ch, baseSR);
         }
-      } else if (oversampleFactor === 2) {
+      } 
+      else if (osf === 2) {
         // 2x oversampling
-        const upsampled = new Float32Array(blockSize * 2);
-        const processed = new Float32Array(blockSize * 2);
+        const upLen = blockSize * 2;
+        const upsampled = new Float32Array(upLen);
+        const processed = new Float32Array(upLen);
         
-        // Upsample
-        this.upsample2x(inputChannel, upsampled, blockSize);
+        this.upsample2x(inCh, upsampled, blockSize);
         
-        // Process at 2x rate
-        for (let i = 0; i < blockSize * 2; i++) {
-          const idx = Math.floor(i / 2);
+        const osSR = baseSR * 2;
+        for (let i = 0; i < upLen; i++) {
+          const idx = i >> 1;
           const cutoff = parameters.cutoff.length > 1 ? parameters.cutoff[idx] : parameters.cutoff[0];
-          const resonance = parameters.resonance.length > 1 ? parameters.resonance[idx] : parameters.resonance[0];
+          const res = parameters.resonance.length > 1 ? parameters.resonance[idx] : parameters.resonance[0];
           const morph = parameters.morph.length > 1 ? parameters.morph[idx] : parameters.morph[0];
           const drive = parameters.drive.length > 1 ? parameters.drive[idx] : parameters.drive[0];
           
-          processed[i] = this.processSVF(upsampled[i], cutoff, resonance, morph, drive, ch, 2);
+          processed[i] = this.processSample(upsampled[i], cutoff, res, morph, drive, ch, osSR);
         }
         
-        // Decimate with halfband filter
-        const decimated = this.halfbandDecimate(processed, this.halfbandState1[ch], blockSize * 2);
-        outputChannel.set(decimated);
+        const decimated = this.halfbandDecimate(processed, this.halfbandState1[ch], upLen);
+        outCh.set(decimated);
+      } 
+      else if (osf === 4) {
+        // 4x oversampling (two stages)
+        const up2Len = blockSize * 2;
+        const up4Len = blockSize * 4;
         
-      } else if (oversampleFactor === 4) {
-        // 4x oversampling (two stages of 2x)
-        const up2x = new Float32Array(blockSize * 2);
-        const up4x = new Float32Array(blockSize * 4);
-        const processed = new Float32Array(blockSize * 4);
+        const up2 = new Float32Array(up2Len);
+        const up4 = new Float32Array(up4Len);
+        const processed = new Float32Array(up4Len);
         
-        // Upsample 2x, then 2x again
-        this.upsample2x(inputChannel, up2x, blockSize);
-        this.upsample2x(up2x, up4x, blockSize * 2);
+        this.upsample2x(inCh, up2, blockSize);
+        this.upsample2x(up2, up4, up2Len);
         
-        // Process at 4x rate
-        for (let i = 0; i < blockSize * 4; i++) {
-          const idx = Math.floor(i / 4);
+        const osSR = baseSR * 4;
+        for (let i = 0; i < up4Len; i++) {
+          const idx = i >> 2;
           const cutoff = parameters.cutoff.length > 1 ? parameters.cutoff[idx] : parameters.cutoff[0];
-          const resonance = parameters.resonance.length > 1 ? parameters.resonance[idx] : parameters.resonance[0];
+          const res = parameters.resonance.length > 1 ? parameters.resonance[idx] : parameters.resonance[0];
           const morph = parameters.morph.length > 1 ? parameters.morph[idx] : parameters.morph[0];
           const drive = parameters.drive.length > 1 ? parameters.drive[idx] : parameters.drive[0];
           
-          processed[i] = this.processSVF(up4x[i], cutoff, resonance, morph, drive, ch, 4);
+          processed[i] = this.processSample(up4[i], cutoff, res, morph, drive, ch, osSR);
         }
         
-        // Decimate: 4x -> 2x -> 1x
-        const dec2x = this.halfbandDecimate(processed, this.halfbandState1[ch], blockSize * 4);
-        const dec1x = this.halfbandDecimate(dec2x, this.halfbandState2[ch], blockSize * 2);
-        outputChannel.set(dec1x);
+        const dec2 = this.halfbandDecimate(processed, this.halfbandState1[ch], up4Len);
+        const dec1 = this.halfbandDecimate(dec2, this.halfbandState2[ch], up2Len);
+        outCh.set(dec1);
       }
     }
     
