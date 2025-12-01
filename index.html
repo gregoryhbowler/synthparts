@@ -1,0 +1,989 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>SEM Filter — TPT/ZDF State Variable Filter</title>
+  <style>
+    @import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@300;400;500;600&family=Space+Grotesk:wght@400;500;600&display=swap');
+    
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
+    
+    :root {
+      --bg-primary: #0a0a0b;
+      --bg-secondary: #111113;
+      --bg-tertiary: #1a1a1d;
+      --bg-panel: #0d0d0e;
+      --border: #2a2a2d;
+      --border-active: #3a3a3d;
+      --text-primary: #e8e8ea;
+      --text-secondary: #888890;
+      --text-dim: #555558;
+      --accent: #ff6b35;
+      --accent-dim: #cc5528;
+      --accent-glow: rgba(255, 107, 53, 0.15);
+      --led-on: #ff6b35;
+      --led-off: #2a1a10;
+      --knob-track: #1a1a1d;
+      --knob-fill: #ff6b35;
+    }
+    
+    body {
+      font-family: 'JetBrains Mono', monospace;
+      background: var(--bg-primary);
+      color: var(--text-primary);
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      padding: 2rem;
+      background-image: 
+        radial-gradient(ellipse at 50% 0%, rgba(255, 107, 53, 0.03) 0%, transparent 50%),
+        linear-gradient(180deg, var(--bg-primary) 0%, #080808 100%);
+    }
+    
+    .header {
+      text-align: center;
+      margin-bottom: 2rem;
+    }
+    
+    .header h1 {
+      font-family: 'Space Grotesk', sans-serif;
+      font-size: 1.8rem;
+      font-weight: 600;
+      letter-spacing: 0.1em;
+      color: var(--text-primary);
+      margin-bottom: 0.25rem;
+    }
+    
+    .header h1 span {
+      color: var(--accent);
+    }
+    
+    .header .subtitle {
+      font-size: 0.7rem;
+      color: var(--text-dim);
+      letter-spacing: 0.15em;
+      text-transform: uppercase;
+    }
+    
+    .panel {
+      background: var(--bg-panel);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 2rem;
+      max-width: 800px;
+      width: 100%;
+      box-shadow: 
+        0 4px 24px rgba(0, 0, 0, 0.4),
+        inset 0 1px 0 rgba(255, 255, 255, 0.02);
+    }
+    
+    .controls-grid {
+      display: grid;
+      grid-template-columns: repeat(5, 1fr);
+      gap: 1.5rem;
+      margin-bottom: 2rem;
+    }
+    
+    .control {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 0.75rem;
+    }
+    
+    .control-label {
+      font-size: 0.65rem;
+      color: var(--text-secondary);
+      letter-spacing: 0.12em;
+      text-transform: uppercase;
+    }
+    
+    .knob-container {
+      position: relative;
+      width: 72px;
+      height: 72px;
+    }
+    
+    .knob {
+      width: 100%;
+      height: 100%;
+      border-radius: 50%;
+      background: 
+        radial-gradient(circle at 30% 30%, #2a2a2d 0%, #151517 50%, #0a0a0b 100%);
+      border: 2px solid var(--border);
+      cursor: grab;
+      position: relative;
+      transition: border-color 0.15s ease;
+      box-shadow:
+        0 4px 12px rgba(0, 0, 0, 0.5),
+        inset 0 2px 4px rgba(255, 255, 255, 0.03);
+    }
+    
+    .knob:hover {
+      border-color: var(--border-active);
+    }
+    
+    .knob:active {
+      cursor: grabbing;
+    }
+    
+    .knob-indicator {
+      position: absolute;
+      top: 8px;
+      left: 50%;
+      transform: translateX(-50%);
+      width: 3px;
+      height: 12px;
+      background: var(--accent);
+      border-radius: 2px;
+      box-shadow: 0 0 8px var(--accent);
+    }
+    
+    .knob-ring {
+      position: absolute;
+      top: -6px;
+      left: -6px;
+      right: -6px;
+      bottom: -6px;
+      border-radius: 50%;
+      border: 1px solid var(--border);
+      pointer-events: none;
+    }
+    
+    .control-value {
+      font-size: 0.75rem;
+      font-weight: 500;
+      color: var(--text-primary);
+      font-variant-numeric: tabular-nums;
+      min-width: 60px;
+      text-align: center;
+    }
+    
+    .section {
+      margin-bottom: 1.5rem;
+    }
+    
+    .section-label {
+      font-size: 0.6rem;
+      color: var(--text-dim);
+      letter-spacing: 0.15em;
+      text-transform: uppercase;
+      margin-bottom: 0.75rem;
+      padding-bottom: 0.5rem;
+      border-bottom: 1px solid var(--border);
+    }
+    
+    .source-controls {
+      display: flex;
+      gap: 1rem;
+      align-items: center;
+      flex-wrap: wrap;
+    }
+    
+    .button-group {
+      display: flex;
+      gap: 0.5rem;
+    }
+    
+    button {
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 0.7rem;
+      font-weight: 500;
+      letter-spacing: 0.08em;
+      padding: 0.6rem 1rem;
+      background: var(--bg-tertiary);
+      color: var(--text-secondary);
+      border: 1px solid var(--border);
+      border-radius: 4px;
+      cursor: pointer;
+      transition: all 0.15s ease;
+      text-transform: uppercase;
+    }
+    
+    button:hover {
+      background: var(--bg-secondary);
+      color: var(--text-primary);
+      border-color: var(--border-active);
+    }
+    
+    button.active {
+      background: var(--accent-glow);
+      color: var(--accent);
+      border-color: var(--accent-dim);
+    }
+    
+    button.primary {
+      background: var(--accent);
+      color: #000;
+      border-color: var(--accent);
+    }
+    
+    button.primary:hover {
+      background: var(--accent-dim);
+      border-color: var(--accent-dim);
+    }
+    
+    .osc-controls {
+      display: flex;
+      gap: 1rem;
+      align-items: center;
+      margin-left: auto;
+    }
+    
+    .mini-control {
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+    }
+    
+    .mini-control label {
+      font-size: 0.6rem;
+      color: var(--text-dim);
+      letter-spacing: 0.1em;
+      text-transform: uppercase;
+    }
+    
+    .mini-control input[type="range"] {
+      width: 80px;
+      height: 4px;
+      -webkit-appearance: none;
+      appearance: none;
+      background: var(--knob-track);
+      border-radius: 2px;
+      cursor: pointer;
+    }
+    
+    .mini-control input[type="range"]::-webkit-slider-thumb {
+      -webkit-appearance: none;
+      width: 12px;
+      height: 12px;
+      background: var(--text-primary);
+      border-radius: 50%;
+      border: 2px solid var(--accent);
+      cursor: grab;
+    }
+    
+    select {
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 0.7rem;
+      padding: 0.5rem 0.75rem;
+      background: var(--bg-tertiary);
+      color: var(--text-primary);
+      border: 1px solid var(--border);
+      border-radius: 4px;
+      cursor: pointer;
+    }
+    
+    .visualizer-container {
+      background: var(--bg-secondary);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      padding: 1rem;
+      margin-bottom: 1.5rem;
+    }
+    
+    canvas {
+      width: 100%;
+      height: 120px;
+      display: block;
+    }
+    
+    .status {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      font-size: 0.65rem;
+      color: var(--text-dim);
+    }
+    
+    .status-item {
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+    }
+    
+    .led {
+      width: 6px;
+      height: 6px;
+      border-radius: 50%;
+      background: var(--led-off);
+      transition: all 0.15s ease;
+    }
+    
+    .led.on {
+      background: var(--led-on);
+      box-shadow: 0 0 8px var(--led-on);
+    }
+    
+    .drift-badge {
+      font-size: 0.55rem;
+      padding: 0.25rem 0.5rem;
+      background: var(--bg-tertiary);
+      border: 1px solid var(--border);
+      border-radius: 3px;
+      color: var(--text-dim);
+      font-variant-numeric: tabular-nums;
+    }
+    
+    .info-panel {
+      margin-top: 2rem;
+      padding-top: 1.5rem;
+      border-top: 1px solid var(--border);
+      font-size: 0.7rem;
+      color: var(--text-dim);
+      line-height: 1.6;
+    }
+    
+    .info-panel h3 {
+      font-family: 'Space Grotesk', sans-serif;
+      font-size: 0.75rem;
+      font-weight: 500;
+      color: var(--text-secondary);
+      margin-bottom: 0.75rem;
+      letter-spacing: 0.1em;
+      text-transform: uppercase;
+    }
+    
+    .info-grid {
+      display: grid;
+      grid-template-columns: repeat(2, 1fr);
+      gap: 1rem;
+    }
+    
+    .info-item {
+      display: flex;
+      flex-direction: column;
+      gap: 0.25rem;
+    }
+    
+    .info-item strong {
+      color: var(--text-secondary);
+    }
+    
+    @media (max-width: 700px) {
+      .controls-grid {
+        grid-template-columns: repeat(3, 1fr);
+      }
+      
+      .source-controls {
+        flex-direction: column;
+        align-items: flex-start;
+      }
+      
+      .osc-controls {
+        margin-left: 0;
+      }
+    }
+  </style>
+</head>
+<body>
+  <header class="header">
+    <h1><span>SEM</span> FILTER</h1>
+    <p class="subtitle">TPT/ZDF State Variable Filter with OTA Saturation</p>
+  </header>
+  
+  <main class="panel">
+    <div class="controls-grid">
+      <div class="control">
+        <span class="control-label">Cutoff</span>
+        <div class="knob-container">
+          <div class="knob-ring"></div>
+          <div class="knob" id="knob-cutoff" data-param="cutoff" data-min="20" data-max="20000" data-value="1000" data-curve="log">
+            <div class="knob-indicator"></div>
+          </div>
+        </div>
+        <span class="control-value" id="value-cutoff">1000 Hz</span>
+      </div>
+      
+      <div class="control">
+        <span class="control-label">Resonance</span>
+        <div class="knob-container">
+          <div class="knob-ring"></div>
+          <div class="knob" id="knob-resonance" data-param="resonance" data-min="0" data-max="1" data-value="0" data-curve="linear">
+            <div class="knob-indicator"></div>
+          </div>
+        </div>
+        <span class="control-value" id="value-resonance">0%</span>
+      </div>
+      
+      <div class="control">
+        <span class="control-label">Morph</span>
+        <div class="knob-container">
+          <div class="knob-ring"></div>
+          <div class="knob" id="knob-morph" data-param="morph" data-min="-1" data-max="1" data-value="0" data-curve="linear">
+            <div class="knob-indicator"></div>
+          </div>
+        </div>
+        <span class="control-value" id="value-morph">Notch</span>
+      </div>
+      
+      <div class="control">
+        <span class="control-label">Drive</span>
+        <div class="knob-container">
+          <div class="knob-ring"></div>
+          <div class="knob" id="knob-drive" data-param="drive" data-min="0.1" data-max="10" data-value="1" data-curve="log">
+            <div class="knob-indicator"></div>
+          </div>
+        </div>
+        <span class="control-value" id="value-drive">0.0 dB</span>
+      </div>
+      
+      <div class="control">
+        <span class="control-label">Oversample</span>
+        <div class="knob-container">
+          <div class="knob-ring"></div>
+          <div class="knob" id="knob-oversample" data-param="oversample" data-min="1" data-max="4" data-value="2" data-curve="linear" data-steps="3">
+            <div class="knob-indicator"></div>
+          </div>
+        </div>
+        <span class="control-value" id="value-oversample">2×</span>
+      </div>
+    </div>
+    
+    <div class="section">
+      <div class="section-label">Audio Source</div>
+      <div class="source-controls">
+        <div class="button-group">
+          <button id="btn-osc" class="active">Oscillator</button>
+          <button id="btn-noise">Noise</button>
+          <button id="btn-file">Audio File</button>
+        </div>
+        
+        <div class="osc-controls" id="osc-controls">
+          <div class="mini-control">
+            <label>Freq</label>
+            <input type="range" id="osc-freq" min="20" max="2000" value="110">
+          </div>
+          <select id="osc-type">
+            <option value="sawtooth">Saw</option>
+            <option value="square">Square</option>
+            <option value="triangle">Triangle</option>
+            <option value="sine">Sine</option>
+          </select>
+        </div>
+        
+        <input type="file" id="audio-file" accept="audio/*" style="display: none;">
+        
+        <button id="btn-play" class="primary">Start</button>
+      </div>
+    </div>
+    
+    <div class="visualizer-container">
+      <canvas id="visualizer"></canvas>
+    </div>
+    
+    <div class="status">
+      <div class="status-item">
+        <div class="led" id="led-audio"></div>
+        <span>Audio</span>
+      </div>
+      <div class="status-item">
+        <span>Instance Drift:</span>
+        <span class="drift-badge" id="drift-info">—</span>
+      </div>
+      <div class="status-item">
+        <span id="cpu-usage">CPU: —</span>
+      </div>
+    </div>
+    
+    <div class="info-panel">
+      <h3>Implementation Notes</h3>
+      <div class="info-grid">
+        <div class="info-item">
+          <strong>Topology</strong>
+          <span>Zero-Delay Feedback (TPT) State Variable Filter with trapezoidal integration</span>
+        </div>
+        <div class="info-item">
+          <strong>Nonlinearity</strong>
+          <span>Asymmetric tanh at integrator inputs modeling CA3080 OTA saturation</span>
+        </div>
+        <div class="info-item">
+          <strong>Resonance Model</strong>
+          <span>Damping-based (adds damping to naturally resonant system)</span>
+        </div>
+        <div class="info-item">
+          <strong>Analog Drift</strong>
+          <span>Per-instance randomization of cutoff, Q, integrator caps, and nonlinearity asymmetry</span>
+        </div>
+      </div>
+    </div>
+  </main>
+  
+  <script>
+    // =============================================
+    // SEM Filter Demo - Main Application
+    // =============================================
+    
+    let audioContext = null;
+    let semFilter = null;
+    let sourceNode = null;
+    let oscillator = null;
+    let noiseNode = null;
+    let audioBufferSource = null;
+    let audioBuffer = null;
+    let analyser = null;
+    let isPlaying = false;
+    let currentSource = 'osc';
+    let instanceSeed = Math.floor(Math.random() * 10000);
+    
+    // Knob state
+    const knobState = {};
+    let activeKnob = null;
+    let knobStartY = 0;
+    let knobStartValue = 0;
+    
+    // =============================================
+    // Audio Setup
+    // =============================================
+    
+    async function initAudio() {
+      if (audioContext) return;
+      
+      audioContext = new AudioContext();
+      
+      // Load the worklet
+      await audioContext.audioWorklet.addModule('sem-processor.js');
+      
+      // Create the SEM filter node
+      semFilter = new AudioWorkletNode(audioContext, 'sem-filter-processor', {
+        processorOptions: { seed: instanceSeed }
+      });
+      
+      // Create analyser for visualization
+      analyser = audioContext.createAnalyser();
+      analyser.fftSize = 2048;
+      analyser.smoothingTimeConstant = 0.8;
+      
+      // Connect filter to analyser to output
+      semFilter.connect(analyser);
+      analyser.connect(audioContext.destination);
+      
+      // Update drift display
+      updateDriftDisplay();
+      
+      console.log('Audio initialized with instance seed:', instanceSeed);
+    }
+    
+    function createOscillator() {
+      if (oscillator) {
+        oscillator.stop();
+        oscillator.disconnect();
+      }
+      
+      oscillator = audioContext.createOscillator();
+      oscillator.type = document.getElementById('osc-type').value;
+      oscillator.frequency.value = parseFloat(document.getElementById('osc-freq').value);
+      
+      const gain = audioContext.createGain();
+      gain.gain.value = 0.5;
+      
+      oscillator.connect(gain);
+      gain.connect(semFilter);
+      
+      oscillator.start();
+      return gain;
+    }
+    
+    function createNoiseSource() {
+      // Create white noise
+      const bufferSize = audioContext.sampleRate * 2;
+      const buffer = audioContext.createBuffer(1, bufferSize, audioContext.sampleRate);
+      const data = buffer.getChannelData(0);
+      
+      for (let i = 0; i < bufferSize; i++) {
+        data[i] = Math.random() * 2 - 1;
+      }
+      
+      noiseNode = audioContext.createBufferSource();
+      noiseNode.buffer = buffer;
+      noiseNode.loop = true;
+      
+      const gain = audioContext.createGain();
+      gain.gain.value = 0.3;
+      
+      noiseNode.connect(gain);
+      gain.connect(semFilter);
+      
+      noiseNode.start();
+      return gain;
+    }
+    
+    function createAudioFileSource() {
+      if (!audioBuffer) {
+        alert('Please load an audio file first');
+        return null;
+      }
+      
+      audioBufferSource = audioContext.createBufferSource();
+      audioBufferSource.buffer = audioBuffer;
+      audioBufferSource.loop = true;
+      
+      const gain = audioContext.createGain();
+      gain.gain.value = 1.0;
+      
+      audioBufferSource.connect(gain);
+      gain.connect(semFilter);
+      
+      audioBufferSource.start();
+      return gain;
+    }
+    
+    async function startAudio() {
+      await initAudio();
+      
+      if (audioContext.state === 'suspended') {
+        await audioContext.resume();
+      }
+      
+      // Stop any existing source
+      stopSource();
+      
+      // Create appropriate source
+      if (currentSource === 'osc') {
+        sourceNode = createOscillator();
+      } else if (currentSource === 'noise') {
+        sourceNode = createNoiseSource();
+      } else if (currentSource === 'file') {
+        sourceNode = createAudioFileSource();
+        if (!sourceNode) return;
+      }
+      
+      isPlaying = true;
+      document.getElementById('btn-play').textContent = 'Stop';
+      document.getElementById('led-audio').classList.add('on');
+      
+      // Start visualization
+      requestAnimationFrame(drawVisualization);
+    }
+    
+    function stopSource() {
+      if (oscillator) {
+        oscillator.stop();
+        oscillator.disconnect();
+        oscillator = null;
+      }
+      if (noiseNode) {
+        noiseNode.stop();
+        noiseNode.disconnect();
+        noiseNode = null;
+      }
+      if (audioBufferSource) {
+        audioBufferSource.stop();
+        audioBufferSource.disconnect();
+        audioBufferSource = null;
+      }
+      if (sourceNode) {
+        sourceNode.disconnect();
+        sourceNode = null;
+      }
+    }
+    
+    function stopAudio() {
+      stopSource();
+      isPlaying = false;
+      document.getElementById('btn-play').textContent = 'Start';
+      document.getElementById('led-audio').classList.remove('on');
+    }
+    
+    function toggleAudio() {
+      if (isPlaying) {
+        stopAudio();
+      } else {
+        startAudio();
+      }
+    }
+    
+    // =============================================
+    // Knob Control
+    // =============================================
+    
+    function initKnobs() {
+      document.querySelectorAll('.knob').forEach(knob => {
+        const param = knob.dataset.param;
+        const min = parseFloat(knob.dataset.min);
+        const max = parseFloat(knob.dataset.max);
+        const value = parseFloat(knob.dataset.value);
+        const curve = knob.dataset.curve || 'linear';
+        const steps = knob.dataset.steps ? parseInt(knob.dataset.steps) : null;
+        
+        knobState[param] = { min, max, value, curve, steps, element: knob };
+        updateKnobVisual(param);
+        updateKnobValue(param);
+        
+        knob.addEventListener('mousedown', (e) => startKnobDrag(e, param));
+        knob.addEventListener('touchstart', (e) => startKnobDrag(e, param), { passive: false });
+        
+        // Double-click to reset
+        knob.addEventListener('dblclick', () => {
+          knobState[param].value = parseFloat(knob.dataset.value);
+          updateKnobVisual(param);
+          updateKnobValue(param);
+          updateFilterParam(param, knobState[param].value);
+        });
+      });
+      
+      document.addEventListener('mousemove', handleKnobDrag);
+      document.addEventListener('touchmove', handleKnobDrag, { passive: false });
+      document.addEventListener('mouseup', endKnobDrag);
+      document.addEventListener('touchend', endKnobDrag);
+    }
+    
+    function startKnobDrag(e, param) {
+      e.preventDefault();
+      activeKnob = param;
+      knobStartY = e.clientY || e.touches[0].clientY;
+      knobStartValue = knobState[param].value;
+    }
+    
+    function handleKnobDrag(e) {
+      if (!activeKnob) return;
+      e.preventDefault();
+      
+      const state = knobState[activeKnob];
+      const y = e.clientY || e.touches[0].clientY;
+      const delta = knobStartY - y;
+      
+      // Sensitivity based on range
+      let sensitivity;
+      if (state.curve === 'log') {
+        sensitivity = 0.01;
+      } else {
+        sensitivity = (state.max - state.min) / 200;
+      }
+      
+      let newValue;
+      if (state.curve === 'log') {
+        // Logarithmic scaling
+        const logMin = Math.log(state.min);
+        const logMax = Math.log(state.max);
+        const logStart = Math.log(knobStartValue);
+        const logNew = logStart + delta * (logMax - logMin) * sensitivity;
+        newValue = Math.exp(logNew);
+      } else {
+        newValue = knobStartValue + delta * sensitivity;
+      }
+      
+      // Clamp and quantize if stepped
+      newValue = Math.max(state.min, Math.min(state.max, newValue));
+      
+      if (state.steps) {
+        const stepSize = (state.max - state.min) / (state.steps - 1);
+        newValue = Math.round((newValue - state.min) / stepSize) * stepSize + state.min;
+      }
+      
+      state.value = newValue;
+      updateKnobVisual(activeKnob);
+      updateKnobValue(activeKnob);
+      updateFilterParam(activeKnob, newValue);
+    }
+    
+    function endKnobDrag() {
+      activeKnob = null;
+    }
+    
+    function updateKnobVisual(param) {
+      const state = knobState[param];
+      let normalized;
+      
+      if (state.curve === 'log') {
+        const logMin = Math.log(state.min);
+        const logMax = Math.log(state.max);
+        const logVal = Math.log(state.value);
+        normalized = (logVal - logMin) / (logMax - logMin);
+      } else {
+        normalized = (state.value - state.min) / (state.max - state.min);
+      }
+      
+      // Map to rotation angle (-135 to 135 degrees)
+      const angle = -135 + normalized * 270;
+      state.element.style.transform = `rotate(${angle}deg)`;
+    }
+    
+    function updateKnobValue(param) {
+      const state = knobState[param];
+      const display = document.getElementById(`value-${param}`);
+      
+      switch (param) {
+        case 'cutoff':
+          if (state.value >= 1000) {
+            display.textContent = (state.value / 1000).toFixed(2) + ' kHz';
+          } else {
+            display.textContent = Math.round(state.value) + ' Hz';
+          }
+          break;
+        case 'resonance':
+          display.textContent = Math.round(state.value * 100) + '%';
+          break;
+        case 'morph':
+          if (state.value < -0.33) {
+            display.textContent = 'LP';
+          } else if (state.value > 0.33) {
+            display.textContent = 'HP';
+          } else {
+            display.textContent = 'Notch';
+          }
+          break;
+        case 'drive':
+          const db = 20 * Math.log10(state.value);
+          display.textContent = db.toFixed(1) + ' dB';
+          break;
+        case 'oversample':
+          const factor = Math.round(state.value);
+          display.textContent = (factor === 3 ? 2 : factor) + '×';
+          break;
+      }
+    }
+    
+    function updateFilterParam(param, value) {
+      if (!semFilter) return;
+      
+      const audioParam = semFilter.parameters.get(param);
+      if (audioParam) {
+        audioParam.setValueAtTime(value, audioContext.currentTime);
+      }
+    }
+    
+    // =============================================
+    // Visualization
+    // =============================================
+    
+    function drawVisualization() {
+      if (!isPlaying || !analyser) return;
+      
+      const canvas = document.getElementById('visualizer');
+      const ctx = canvas.getContext('2d');
+      const width = canvas.width = canvas.offsetWidth * 2;
+      const height = canvas.height = canvas.offsetHeight * 2;
+      
+      // Get frequency data
+      const bufferLength = analyser.frequencyBinCount;
+      const dataArray = new Uint8Array(bufferLength);
+      analyser.getByteFrequencyData(dataArray);
+      
+      // Clear
+      ctx.fillStyle = '#111113';
+      ctx.fillRect(0, 0, width, height);
+      
+      // Draw frequency bars
+      const barCount = 64;
+      const barWidth = width / barCount;
+      const barGap = 2;
+      
+      for (let i = 0; i < barCount; i++) {
+        // Use logarithmic frequency distribution
+        const logIndex = Math.pow(i / barCount, 2) * bufferLength * 0.5;
+        const index = Math.floor(logIndex);
+        const value = dataArray[index] / 255;
+        
+        const barHeight = value * height * 0.9;
+        const x = i * barWidth;
+        const y = height - barHeight;
+        
+        // Gradient based on frequency
+        const hue = 20 + (i / barCount) * 10;
+        ctx.fillStyle = `hsla(${hue}, 80%, ${50 + value * 20}%, ${0.4 + value * 0.6})`;
+        
+        ctx.fillRect(x + barGap/2, y, barWidth - barGap, barHeight);
+      }
+      
+      // Draw center line
+      ctx.strokeStyle = 'rgba(255, 107, 53, 0.2)';
+      ctx.lineWidth = 1;
+      ctx.beginPath();
+      ctx.moveTo(0, height / 2);
+      ctx.lineTo(width, height / 2);
+      ctx.stroke();
+      
+      requestAnimationFrame(drawVisualization);
+    }
+    
+    // =============================================
+    // Drift Display
+    // =============================================
+    
+    function updateDriftDisplay() {
+      // We can't read the actual drift values from the worklet,
+      // but we can show the seed
+      const driftInfo = document.getElementById('drift-info');
+      driftInfo.textContent = `Seed: ${instanceSeed}`;
+    }
+    
+    // =============================================
+    // Event Listeners
+    // =============================================
+    
+    document.addEventListener('DOMContentLoaded', () => {
+      initKnobs();
+      
+      // Source selection
+      document.getElementById('btn-osc').addEventListener('click', () => {
+        currentSource = 'osc';
+        document.querySelectorAll('.button-group button').forEach(b => b.classList.remove('active'));
+        document.getElementById('btn-osc').classList.add('active');
+        document.getElementById('osc-controls').style.display = 'flex';
+        if (isPlaying) startAudio();
+      });
+      
+      document.getElementById('btn-noise').addEventListener('click', () => {
+        currentSource = 'noise';
+        document.querySelectorAll('.button-group button').forEach(b => b.classList.remove('active'));
+        document.getElementById('btn-noise').classList.add('active');
+        document.getElementById('osc-controls').style.display = 'none';
+        if (isPlaying) startAudio();
+      });
+      
+      document.getElementById('btn-file').addEventListener('click', () => {
+        document.getElementById('audio-file').click();
+      });
+      
+      document.getElementById('audio-file').addEventListener('change', async (e) => {
+        const file = e.target.files[0];
+        if (!file) return;
+        
+        await initAudio();
+        
+        const arrayBuffer = await file.arrayBuffer();
+        audioBuffer = await audioContext.decodeAudioData(arrayBuffer);
+        
+        currentSource = 'file';
+        document.querySelectorAll('.button-group button').forEach(b => b.classList.remove('active'));
+        document.getElementById('btn-file').classList.add('active');
+        document.getElementById('btn-file').textContent = file.name.slice(0, 12);
+        document.getElementById('osc-controls').style.display = 'none';
+        
+        if (isPlaying) startAudio();
+      });
+      
+      // Play button
+      document.getElementById('btn-play').addEventListener('click', toggleAudio);
+      
+      // Oscillator controls
+      document.getElementById('osc-freq').addEventListener('input', (e) => {
+        if (oscillator) {
+          oscillator.frequency.setValueAtTime(parseFloat(e.target.value), audioContext.currentTime);
+        }
+      });
+      
+      document.getElementById('osc-type').addEventListener('change', (e) => {
+        if (oscillator) {
+          oscillator.type = e.target.value;
+        }
+      });
+      
+      // Keyboard shortcuts
+      document.addEventListener('keydown', (e) => {
+        if (e.code === 'Space' && e.target === document.body) {
+          e.preventDefault();
+          toggleAudio();
+        }
+      });
+    });
+  </script>
+</body>
+</html>
