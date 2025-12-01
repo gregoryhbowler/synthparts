@@ -64,10 +64,10 @@ class WaspProcessor extends AudioWorkletProcessor {
     const out = output[0];
     const len = out.length;
     
-    // Log if we have signal
-    if (this.frameCount === 10) {
+    // Log signal levels
+    if (this.frameCount === 10 || this.frameCount === 100) {
       const maxIn = Math.max(...inp.map(Math.abs));
-      console.log('Input signal level:', maxIn);
+      console.log('Frame', this.frameCount, 'Input level:', maxIn);
     }
     
     const cutoffArr = parameters.cutoff;
@@ -126,6 +126,12 @@ class WaspProcessor extends AudioWorkletProcessor {
       this.dcOut = dcBlocked;
       
       out[i] = dcBlocked;
+    }
+    
+    // Log output level
+    if (this.frameCount === 10 || this.frameCount === 100) {
+      const maxOut = Math.max(...out.map(Math.abs));
+      console.log('Frame', this.frameCount, 'Output level:', maxOut);
     }
     
     return true;
