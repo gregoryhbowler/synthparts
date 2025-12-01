@@ -30,6 +30,9 @@ class WaspProcessor extends AudioWorkletProcessor {
     this.dcOut = 0;
     
     this.frameCount = 0;
+    
+    // SET TO FALSE TO ENABLE FILTER
+    this.bypassFilter = false;
   }
 
   tanh(x) {
@@ -49,14 +52,13 @@ class WaspProcessor extends AudioWorkletProcessor {
     const input = inputs[0];
     const output = outputs[0];
     
-    // Debug first few frames
     this.frameCount++;
-    if (this.frameCount <= 5) {
-      console.log('Frame', this.frameCount, 'inputs:', inputs.length, 'input channels:', input?.length, 'outputs:', outputs.length);
-    }
     
     // Safety check
     if (!input || !input[0] || !output || !output[0]) {
+      if (this.frameCount <= 5) {
+        console.log('Frame', this.frameCount, 'EARLY EXIT - no input/output');
+      }
       return true;
     }
     
@@ -64,12 +66,21 @@ class WaspProcessor extends AudioWorkletProcessor {
     const out = output[0];
     const len = out.length;
     
-    // Log signal levels
-    if (this.frameCount === 10 || this.frameCount === 100) {
-      const maxIn = Math.max(...inp.map(Math.abs));
-      console.log('Frame', this.frameCount, 'Input level:', maxIn);
+    // Debug logging
+    if (this.frameCount <= 5 || this.frameCount === 10 || this.frameCount === 50) {
+      const maxIn = Math.max(...Array.from(inp).map(Math.abs));
+      console.log('Frame', this.frameCount, 'len:', len, 'maxIn:', maxIn.toFixed(4), 'bypass:', this.bypassFilter);
     }
     
+    // BYPASS MODE - just pass audio through
+    if (this.bypassFilter) {
+      for (let i = 0; i < len; i++) {
+        out[i] = inp[i];
+      }
+      return true;
+    }
+    
+    // FILTER MODE
     const cutoffArr = parameters.cutoff;
     const resArr = parameters.resonance;
     const driveArr = parameters.drive;
@@ -129,9 +140,9 @@ class WaspProcessor extends AudioWorkletProcessor {
     }
     
     // Log output level
-    if (this.frameCount === 10 || this.frameCount === 100) {
-      const maxOut = Math.max(...out.map(Math.abs));
-      console.log('Frame', this.frameCount, 'Output level:', maxOut);
+    if (this.frameCount === 10 || this.frameCount === 50) {
+      const maxOut = Math.max(...Array.from(out).map(Math.abs));
+      console.log('Frame', this.frameCount, 'maxOut:', maxOut.toFixed(4));
     }
     
     return true;
