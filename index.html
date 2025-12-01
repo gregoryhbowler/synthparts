@@ -1,0 +1,603 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>WASP Filter Test</title>
+  <style>
+    * {
+      box-sizing: border-box;
+    }
+    
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      background: #1a1a2e;
+      color: #eee;
+      margin: 0;
+      padding: 20px;
+      min-height: 100vh;
+    }
+    
+    .container {
+      max-width: 800px;
+      margin: 0 auto;
+    }
+    
+    h1 {
+      color: #f0c040;
+      margin-bottom: 5px;
+    }
+    
+    .subtitle {
+      color: #888;
+      margin-bottom: 30px;
+      font-size: 14px;
+    }
+    
+    .panel {
+      background: #252540;
+      border-radius: 12px;
+      padding: 20px;
+      margin-bottom: 20px;
+    }
+    
+    .panel h2 {
+      margin-top: 0;
+      font-size: 14px;
+      text-transform: uppercase;
+      letter-spacing: 1px;
+      color: #888;
+      border-bottom: 1px solid #333;
+      padding-bottom: 10px;
+      margin-bottom: 20px;
+    }
+    
+    .control-row {
+      display: flex;
+      align-items: center;
+      margin-bottom: 15px;
+      gap: 15px;
+    }
+    
+    .control-row label {
+      width: 100px;
+      font-size: 13px;
+      color: #aaa;
+    }
+    
+    .control-row input[type="range"] {
+      flex: 1;
+      height: 6px;
+      -webkit-appearance: none;
+      background: #333;
+      border-radius: 3px;
+      outline: none;
+    }
+    
+    .control-row input[type="range"]::-webkit-slider-thumb {
+      -webkit-appearance: none;
+      width: 18px;
+      height: 18px;
+      background: #f0c040;
+      border-radius: 50%;
+      cursor: pointer;
+    }
+    
+    .control-row .value {
+      width: 80px;
+      text-align: right;
+      font-family: monospace;
+      font-size: 13px;
+      color: #f0c040;
+    }
+    
+    .mode-buttons {
+      display: flex;
+      gap: 10px;
+      flex: 1;
+    }
+    
+    .mode-buttons button {
+      flex: 1;
+      padding: 10px;
+      background: #333;
+      border: none;
+      border-radius: 6px;
+      color: #888;
+      cursor: pointer;
+      font-size: 13px;
+      transition: all 0.2s;
+    }
+    
+    .mode-buttons button:hover {
+      background: #444;
+    }
+    
+    .mode-buttons button.active {
+      background: #f0c040;
+      color: #1a1a2e;
+    }
+    
+    .source-buttons {
+      display: flex;
+      gap: 10px;
+      margin-bottom: 15px;
+    }
+    
+    .source-buttons button {
+      flex: 1;
+      padding: 12px;
+      background: #333;
+      border: none;
+      border-radius: 6px;
+      color: #aaa;
+      cursor: pointer;
+      font-size: 13px;
+      transition: all 0.2s;
+    }
+    
+    .source-buttons button:hover {
+      background: #444;
+    }
+    
+    .source-buttons button.active {
+      background: #4a90d9;
+      color: #fff;
+    }
+    
+    #startBtn {
+      width: 100%;
+      padding: 15px;
+      font-size: 16px;
+      background: #4a90d9;
+      border: none;
+      border-radius: 8px;
+      color: white;
+      cursor: pointer;
+      margin-bottom: 20px;
+      transition: background 0.2s;
+    }
+    
+    #startBtn:hover {
+      background: #5aa0e9;
+    }
+    
+    #startBtn.running {
+      background: #d94a4a;
+    }
+    
+    .oscillator-controls {
+      display: none;
+    }
+    
+    .oscillator-controls.visible {
+      display: block;
+    }
+    
+    .info {
+      font-size: 12px;
+      color: #666;
+      margin-top: 20px;
+      line-height: 1.6;
+    }
+    
+    .keyboard {
+      display: flex;
+      gap: 4px;
+      margin-top: 15px;
+      justify-content: center;
+    }
+    
+    .key {
+      width: 40px;
+      height: 100px;
+      background: #eee;
+      border: 1px solid #999;
+      border-radius: 0 0 4px 4px;
+      cursor: pointer;
+      display: flex;
+      align-items: flex-end;
+      justify-content: center;
+      padding-bottom: 8px;
+      font-size: 11px;
+      color: #666;
+      user-select: none;
+    }
+    
+    .key:hover {
+      background: #ddd;
+    }
+    
+    .key:active, .key.active {
+      background: #f0c040;
+    }
+    
+    .key.black {
+      width: 28px;
+      height: 60px;
+      background: #333;
+      color: #888;
+      margin: 0 -14px;
+      z-index: 1;
+      border-radius: 0 0 3px 3px;
+    }
+    
+    .key.black:hover {
+      background: #444;
+    }
+    
+    .key.black:active, .key.black.active {
+      background: #c0a030;
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <h1>WASP Filter</h1>
+    <p class="subtitle">CD4069UB CMOS Inverter Filter Emulation</p>
+    
+    <button id="startBtn">Start Audio</button>
+    
+    <div class="panel">
+      <h2>Input Source</h2>
+      <div class="source-buttons">
+        <button id="srcOsc" class="active">Oscillator</button>
+        <button id="srcNoise">Noise</button>
+        <button id="srcMic">Microphone</button>
+      </div>
+      
+      <div id="oscControls" class="oscillator-controls visible">
+        <div class="control-row">
+          <label>Waveform</label>
+          <div class="mode-buttons">
+            <button class="wave-btn active" data-wave="sawtooth">Saw</button>
+            <button class="wave-btn" data-wave="square">Square</button>
+            <button class="wave-btn" data-wave="triangle">Tri</button>
+            <button class="wave-btn" data-wave="sine">Sine</button>
+          </div>
+        </div>
+        <div class="control-row">
+          <label>Frequency</label>
+          <input type="range" id="oscFreq" min="20" max="2000" value="110" step="1">
+          <span class="value" id="oscFreqVal">110 Hz</span>
+        </div>
+        <div class="keyboard" id="keyboard"></div>
+      </div>
+    </div>
+    
+    <div class="panel">
+      <h2>Filter</h2>
+      <div class="control-row">
+        <label>Cutoff</label>
+        <input type="range" id="cutoff" min="0" max="100" value="50" step="0.1">
+        <span class="value" id="cutoffVal">1000 Hz</span>
+      </div>
+      <div class="control-row">
+        <label>Resonance</label>
+        <input type="range" id="resonance" min="0" max="100" value="50" step="0.1">
+        <span class="value" id="resonanceVal">0.50</span>
+      </div>
+      <div class="control-row">
+        <label>Mode</label>
+        <div class="mode-buttons">
+          <button class="mode-btn active" data-mode="0">LP</button>
+          <button class="mode-btn" data-mode="1">BP</button>
+          <button class="mode-btn" data-mode="2">HP</button>
+          <button class="mode-btn" data-mode="3">Notch</button>
+        </div>
+      </div>
+    </div>
+    
+    <div class="panel">
+      <h2>Character</h2>
+      <div class="control-row">
+        <label>Drive</label>
+        <input type="range" id="drive" min="0" max="100" value="50" step="0.1">
+        <span class="value" id="driveVal">0.50</span>
+      </div>
+      <div class="control-row">
+        <label>Chaos</label>
+        <input type="range" id="chaos" min="0" max="100" value="30" step="0.1">
+        <span class="value" id="chaosVal">0.30</span>
+      </div>
+      <div class="control-row">
+        <label>Output</label>
+        <input type="range" id="output" min="0" max="100" value="70" step="0.1">
+        <span class="value" id="outputVal">0.70</span>
+      </div>
+    </div>
+    
+    <div class="info">
+      <strong>Tips:</strong> Crank resonance past 0.9 for self-oscillation. 
+      High drive + high chaos gives the classic "angry wasp" sound.
+      Use keyboard keys A-K to play notes, or click the piano.
+    </div>
+  </div>
+
+  <script>
+    let audioContext = null;
+    let waspNode = null;
+    let oscillator = null;
+    let noiseNode = null;
+    let micStream = null;
+    let micSource = null;
+    let gainNode = null;
+    let outputGain = null;
+    let currentSource = 'osc';
+    let isRunning = false;
+    
+    const startBtn = document.getElementById('startBtn');
+    const srcOsc = document.getElementById('srcOsc');
+    const srcNoise = document.getElementById('srcNoise');
+    const srcMic = document.getElementById('srcMic');
+    const oscControls = document.getElementById('oscControls');
+    
+    // Frequency mapping (logarithmic for cutoff)
+    function sliderToFreq(value) {
+      const minLog = Math.log(20);
+      const maxLog = Math.log(20000);
+      return Math.exp(minLog + (value / 100) * (maxLog - minLog));
+    }
+    
+    function freqToSlider(freq) {
+      const minLog = Math.log(20);
+      const maxLog = Math.log(20000);
+      return ((Math.log(freq) - minLog) / (maxLog - minLog)) * 100;
+    }
+    
+    // Initialize controls
+    document.getElementById('cutoff').value = freqToSlider(1000);
+    
+    // Create keyboard
+    const keyboard = document.getElementById('keyboard');
+    const notes = [
+      { note: 'C', freq: 130.81, key: 'a' },
+      { note: 'C#', freq: 138.59, key: 'w', black: true },
+      { note: 'D', freq: 146.83, key: 's' },
+      { note: 'D#', freq: 155.56, key: 'e', black: true },
+      { note: 'E', freq: 164.81, key: 'd' },
+      { note: 'F', freq: 174.61, key: 'f' },
+      { note: 'F#', freq: 185.00, key: 't', black: true },
+      { note: 'G', freq: 196.00, key: 'g' },
+      { note: 'G#', freq: 207.65, key: 'y', black: true },
+      { note: 'A', freq: 220.00, key: 'h' },
+      { note: 'A#', freq: 233.08, key: 'u', black: true },
+      { note: 'B', freq: 246.94, key: 'j' },
+      { note: 'C', freq: 261.63, key: 'k' }
+    ];
+    
+    notes.forEach((n, i) => {
+      const key = document.createElement('div');
+      key.className = 'key' + (n.black ? ' black' : '');
+      key.textContent = n.key.toUpperCase();
+      key.dataset.freq = n.freq;
+      key.dataset.keycode = n.key;
+      
+      key.addEventListener('mousedown', () => playNote(n.freq, key));
+      key.addEventListener('mouseup', () => releaseNote(key));
+      key.addEventListener('mouseleave', () => releaseNote(key));
+      
+      keyboard.appendChild(key);
+    });
+    
+    function playNote(freq, keyElement) {
+      if (!oscillator || currentSource !== 'osc') return;
+      oscillator.frequency.setValueAtTime(freq, audioContext.currentTime);
+      document.getElementById('oscFreq').value = freq;
+      document.getElementById('oscFreqVal').textContent = Math.round(freq) + ' Hz';
+      if (keyElement) keyElement.classList.add('active');
+    }
+    
+    function releaseNote(keyElement) {
+      if (keyElement) keyElement.classList.remove('active');
+    }
+    
+    // Keyboard input
+    document.addEventListener('keydown', (e) => {
+      if (e.repeat) return;
+      const note = notes.find(n => n.key === e.key.toLowerCase());
+      if (note) {
+        const keyEl = document.querySelector(`.key[data-keycode="${note.key}"]`);
+        playNote(note.freq, keyEl);
+      }
+    });
+    
+    document.addEventListener('keyup', (e) => {
+      const note = notes.find(n => n.key === e.key.toLowerCase());
+      if (note) {
+        const keyEl = document.querySelector(`.key[data-keycode="${note.key}"]`);
+        releaseNote(keyEl);
+      }
+    });
+    
+    async function initAudio() {
+      audioContext = new AudioContext();
+      
+      // Load the WASP processor
+      await audioContext.audioWorklet.addModule('wasp-processor.js');
+      
+      waspNode = new AudioWorkletNode(audioContext, 'wasp-processor');
+      
+      // Create gain nodes
+      gainNode = audioContext.createGain();
+      gainNode.gain.value = 0.5;
+      
+      outputGain = audioContext.createGain();
+      outputGain.gain.value = 0.7;
+      
+      // Create oscillator
+      oscillator = audioContext.createOscillator();
+      oscillator.type = 'sawtooth';
+      oscillator.frequency.value = 110;
+      oscillator.start();
+      
+      // Create noise source
+      const noiseBuffer = audioContext.createBuffer(1, audioContext.sampleRate * 2, audioContext.sampleRate);
+      const noiseData = noiseBuffer.getChannelData(0);
+      for (let i = 0; i < noiseData.length; i++) {
+        noiseData[i] = Math.random() * 2 - 1;
+      }
+      noiseNode = audioContext.createBufferSource();
+      noiseNode.buffer = noiseBuffer;
+      noiseNode.loop = true;
+      noiseNode.start();
+      
+      // Connect oscillator by default
+      oscillator.connect(gainNode);
+      gainNode.connect(waspNode);
+      waspNode.connect(outputGain);
+      outputGain.connect(audioContext.destination);
+      
+      // Set initial parameters
+      updateParam('cutoff', document.getElementById('cutoff').value);
+      updateParam('resonance', document.getElementById('resonance').value);
+      updateParam('drive', document.getElementById('drive').value);
+      updateParam('chaos', document.getElementById('chaos').value);
+    }
+    
+    function updateParam(name, value) {
+      if (!waspNode) return;
+      
+      const param = waspNode.parameters.get(name);
+      if (!param) return;
+      
+      let realValue;
+      switch (name) {
+        case 'cutoff':
+          realValue = sliderToFreq(value);
+          document.getElementById('cutoffVal').textContent = Math.round(realValue) + ' Hz';
+          break;
+        case 'resonance':
+          realValue = value / 100;
+          document.getElementById('resonanceVal').textContent = realValue.toFixed(2);
+          break;
+        case 'drive':
+          realValue = value / 100;
+          document.getElementById('driveVal').textContent = realValue.toFixed(2);
+          break;
+        case 'chaos':
+          realValue = value / 100;
+          document.getElementById('chaosVal').textContent = realValue.toFixed(2);
+          break;
+        default:
+          realValue = value;
+      }
+      
+      param.setValueAtTime(realValue, audioContext.currentTime);
+    }
+    
+    function setSource(source) {
+      if (!audioContext) return;
+      
+      // Disconnect current source
+      oscillator?.disconnect();
+      noiseNode?.disconnect();
+      micSource?.disconnect();
+      
+      currentSource = source;
+      
+      // Update UI
+      srcOsc.classList.toggle('active', source === 'osc');
+      srcNoise.classList.toggle('active', source === 'noise');
+      srcMic.classList.toggle('active', source === 'mic');
+      oscControls.classList.toggle('visible', source === 'osc');
+      
+      // Connect new source
+      switch (source) {
+        case 'osc':
+          oscillator.connect(gainNode);
+          break;
+        case 'noise':
+          noiseNode.connect(gainNode);
+          break;
+        case 'mic':
+          if (micSource) {
+            micSource.connect(gainNode);
+          } else {
+            navigator.mediaDevices.getUserMedia({ audio: true })
+              .then(stream => {
+                micStream = stream;
+                micSource = audioContext.createMediaStreamSource(stream);
+                micSource.connect(gainNode);
+              })
+              .catch(err => {
+                console.error('Mic access denied:', err);
+                setSource('osc');
+              });
+          }
+          break;
+      }
+    }
+    
+    // Event listeners
+    startBtn.addEventListener('click', async () => {
+      if (!isRunning) {
+        await initAudio();
+        startBtn.textContent = 'Stop Audio';
+        startBtn.classList.add('running');
+        isRunning = true;
+      } else {
+        if (audioContext) {
+          audioContext.close();
+          audioContext = null;
+          waspNode = null;
+          oscillator = null;
+          if (micStream) {
+            micStream.getTracks().forEach(t => t.stop());
+            micStream = null;
+            micSource = null;
+          }
+        }
+        startBtn.textContent = 'Start Audio';
+        startBtn.classList.remove('running');
+        isRunning = false;
+      }
+    });
+    
+    srcOsc.addEventListener('click', () => setSource('osc'));
+    srcNoise.addEventListener('click', () => setSource('noise'));
+    srcMic.addEventListener('click', () => setSource('mic'));
+    
+    // Slider controls
+    document.getElementById('cutoff').addEventListener('input', (e) => updateParam('cutoff', e.target.value));
+    document.getElementById('resonance').addEventListener('input', (e) => updateParam('resonance', e.target.value));
+    document.getElementById('drive').addEventListener('input', (e) => updateParam('drive', e.target.value));
+    document.getElementById('chaos').addEventListener('input', (e) => updateParam('chaos', e.target.value));
+    
+    document.getElementById('output').addEventListener('input', (e) => {
+      const val = e.target.value / 100;
+      document.getElementById('outputVal').textContent = val.toFixed(2);
+      if (outputGain) outputGain.gain.setValueAtTime(val, audioContext.currentTime);
+    });
+    
+    document.getElementById('oscFreq').addEventListener('input', (e) => {
+      const freq = parseFloat(e.target.value);
+      document.getElementById('oscFreqVal').textContent = Math.round(freq) + ' Hz';
+      if (oscillator) oscillator.frequency.setValueAtTime(freq, audioContext.currentTime);
+    });
+    
+    // Mode buttons
+    document.querySelectorAll('.mode-btn').forEach(btn => {
+      btn.addEventListener('click', () => {
+        document.querySelectorAll('.mode-btn').forEach(b => b.classList.remove('active'));
+        btn.classList.add('active');
+        if (waspNode) {
+          waspNode.parameters.get('mode').setValueAtTime(
+            parseFloat(btn.dataset.mode),
+            audioContext.currentTime
+          );
+        }
+      });
+    });
+    
+    // Wave buttons
+    document.querySelectorAll('.wave-btn').forEach(btn => {
+      btn.addEventListener('click', () => {
+        document.querySelectorAll('.wave-btn').forEach(b => b.classList.remove('active'));
+        btn.classList.add('active');
+        if (oscillator) oscillator.type = btn.dataset.wave;
+      });
+    });
+  </script>
+</body>
+</html>
