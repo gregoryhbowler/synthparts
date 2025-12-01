@@ -411,48 +411,64 @@
     });
     
     async function initAudio() {
-      audioContext = new AudioContext();
-      
-      // Load the WASP processor
-      await audioContext.audioWorklet.addModule('wasp-processor.js');
-      
-      waspNode = new AudioWorkletNode(audioContext, 'wasp-processor');
-      
-      // Create gain nodes
-      gainNode = audioContext.createGain();
-      gainNode.gain.value = 0.5;
-      
-      outputGain = audioContext.createGain();
-      outputGain.gain.value = 0.7;
-      
-      // Create oscillator
-      oscillator = audioContext.createOscillator();
-      oscillator.type = 'sawtooth';
-      oscillator.frequency.value = 110;
-      oscillator.start();
-      
-      // Create noise source
-      const noiseBuffer = audioContext.createBuffer(1, audioContext.sampleRate * 2, audioContext.sampleRate);
-      const noiseData = noiseBuffer.getChannelData(0);
-      for (let i = 0; i < noiseData.length; i++) {
-        noiseData[i] = Math.random() * 2 - 1;
+      try {
+        audioContext = new AudioContext();
+        
+        // Resume context (required by browsers after user gesture)
+        if (audioContext.state === 'suspended') {
+          await audioContext.resume();
+        }
+        
+        console.log('AudioContext state:', audioContext.state, 'Sample rate:', audioContext.sampleRate);
+        
+        // Load the WASP processor
+        await audioContext.audioWorklet.addModule('wasp-processor.js');
+        console.log('WASP processor loaded');
+        
+        waspNode = new AudioWorkletNode(audioContext, 'wasp-processor');
+        
+        // Create gain nodes
+        gainNode = audioContext.createGain();
+        gainNode.gain.value = 0.5;
+        
+        outputGain = audioContext.createGain();
+        outputGain.gain.value = 0.7;
+        
+        // Create oscillator
+        oscillator = audioContext.createOscillator();
+        oscillator.type = 'sawtooth';
+        oscillator.frequency.value = 110;
+        oscillator.start();
+        
+        // Create noise source
+        const noiseBuffer = audioContext.createBuffer(1, audioContext.sampleRate * 2, audioContext.sampleRate);
+        const noiseData = noiseBuffer.getChannelData(0);
+        for (let i = 0; i < noiseData.length; i++) {
+          noiseData[i] = Math.random() * 2 - 1;
+        }
+        noiseNode = audioContext.createBufferSource();
+        noiseNode.buffer = noiseBuffer;
+        noiseNode.loop = true;
+        noiseNode.start();
+        
+        // Connect: oscillator -> gain -> wasp -> output -> destination
+        oscillator.connect(gainNode);
+        gainNode.connect(waspNode);
+        waspNode.connect(outputGain);
+        outputGain.connect(audioContext.destination);
+        
+        console.log('Audio graph connected');
+        
+        // Set initial parameters
+        updateParam('cutoff', document.getElementById('cutoff').value);
+        updateParam('resonance', document.getElementById('resonance').value);
+        updateParam('drive', document.getElementById('drive').value);
+        updateParam('chaos', document.getElementById('chaos').value);
+        
+      } catch (err) {
+        console.error('Audio init error:', err);
+        alert('Audio initialization failed: ' + err.message);
       }
-      noiseNode = audioContext.createBufferSource();
-      noiseNode.buffer = noiseBuffer;
-      noiseNode.loop = true;
-      noiseNode.start();
-      
-      // Connect oscillator by default
-      oscillator.connect(gainNode);
-      gainNode.connect(waspNode);
-      waspNode.connect(outputGain);
-      outputGain.connect(audioContext.destination);
-      
-      // Set initial parameters
-      updateParam('cutoff', document.getElementById('cutoff').value);
-      updateParam('resonance', document.getElementById('resonance').value);
-      updateParam('drive', document.getElementById('drive').value);
-      updateParam('chaos', document.getElementById('chaos').value);
     }
     
     function updateParam(name, value) {
