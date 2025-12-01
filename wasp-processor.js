@@ -18,21 +18,14 @@ class WaspProcessor extends AudioWorkletProcessor {
     console.log('WaspProcessor constructor called');
     
     // SVF state
-    this.s1 = 0;
-    this.s2 = 0;
+    this.ic1eq = 0;
+    this.ic2eq = 0;
     
     // Bias drift
     this.bias = 0;
     this.biasTarget = 0;
     
-    // DC blocker
-    this.dcPrev = 0;
-    this.dcOut = 0;
-    
     this.frameCount = 0;
-    
-    // SET TO FALSE TO ENABLE FILTER
-    this.bypassFilter = false;
   }
 
   tanh(x) {
@@ -42,9 +35,11 @@ class WaspProcessor extends AudioWorkletProcessor {
     return x * (27 + x2) / (27 + 9 * x2);
   }
 
+  // CMOS nonlinearity - asymmetric soft clip
   cmos(x, bias, drive) {
-    const gained = (x + bias * 0.1) * (1 + drive * 3);
-    const asymm = gained >= 0 ? gained * 1.1 : gained * 0.9;
+    const input = x + bias * 0.05;
+    const gained = input * (1 + drive * 2);
+    const asymm = gained >= 0 ? gained * 1.15 : gained * 0.85;
     return this.tanh(asymm);
   }
 
@@ -54,11 +49,7 @@ class WaspProcessor extends AudioWorkletProcessor {
     
     this.frameCount++;
     
-    // Safety check
     if (!input || !input[0] || !output || !output[0]) {
-      if (this.frameCount <= 5) {
-        console.log('Frame', this.frameCount, 'EARLY EXIT - no input/output');
-      }
       return true;
     }
     
@@ -67,20 +58,11 @@ class WaspProcessor extends AudioWorkletProcessor {
     const len = out.length;
     
     // Debug logging
-    if (this.frameCount <= 5 || this.frameCount === 10 || this.frameCount === 50) {
+    if (this.frameCount <= 3 || this.frameCount === 10 || this.frameCount === 50) {
       const maxIn = Math.max(...Array.from(inp).map(Math.abs));
-      console.log('Frame', this.frameCount, 'len:', len, 'maxIn:', maxIn.toFixed(4), 'bypass:', this.bypassFilter);
+      console.log('Frame', this.frameCount, 'maxIn:', maxIn.toFixed(4));
     }
     
-    // BYPASS MODE - just pass audio through
-    if (this.bypassFilter) {
-      for (let i = 0; i < len; i++) {
-        out[i] = inp[i];
-      }
-      return true;
-    }
-    
-    // FILTER MODE
     const cutoffArr = parameters.cutoff;
     const resArr = parameters.resonance;
     const driveArr = parameters.drive;
@@ -89,9 +71,9 @@ class WaspProcessor extends AudioWorkletProcessor {
     
     // Update bias drift
     if (Math.random() < 0.01) {
-      this.biasTarget = (Math.random() - 0.5) * chaos;
+      this.biasTarget = (Math.random() - 0.5) * chaos * 0.5;
     }
-    this.bias += (this.biasTarget - this.bias) * 0.001;
+    this.bias += (this.biasTarget - this.bias) * 0.0005;
     
     for (let i = 0; i < len; i++) {
       const v0 = inp[i];
@@ -100,25 +82,33 @@ class WaspProcessor extends AudioWorkletProcessor {
       const res = resArr.length > 1 ? resArr[i] : resArr[0];
       const drive = driveArr.length > 1 ? driveArr[i] : driveArr[0];
       
-      // TPT SVF
-      const g = Math.tan(Math.PI * Math.min(cutoff, sampleRate * 0.49) / sampleRate);
-      const k = 2 - res * 1.98;
+      // Prewarp cutoff for TPT
+      const wd = 2 * Math.PI * Math.min(cutoff, sampleRate * 0.49);
+      const wa = (2 * sampleRate) * Math.tan(wd / (2 * sampleRate));
+      const g = wa / (2 * sampleRate);
       
-      const hp = (v0 - k * this.s1 - this.s2) / (1 + k * g + g * g);
+      // Q from 0.5 to 20
+      const Q = 0.5 + res * 19.5;
+      const k = 1 / Q;
       
-      const bpLin = g * hp + this.s1;
-      const bp = this.cmos(bpLin, this.bias, drive);
+      // Standard TPT SVF
+      const a1 = 1 / (1 + g * (g + k));
+      const a2 = g * a1;
+      const a3 = g * a2;
       
-      const lpLin = g * bp + this.s2;
-      const lp = this.cmos(lpLin, this.bias * 0.7, drive);
+      // Compute outputs
+      const v3 = v0 - this.ic2eq;
+      const v1 = a1 * this.ic1eq + a2 * v3;
+      const v2 = this.ic2eq + a2 * this.ic1eq + a3 * v3;
       
-      this.s1 = 2 * bp - this.s1;
-      this.s2 = 2 * lp - this.s2;
+      // Update states
+      this.ic1eq = 2 * v1 - this.ic1eq;
+      this.ic2eq = 2 * v2 - this.ic2eq;
       
-      // Clamp
-      this.s1 = Math.max(-5, Math.min(5, this.s1));
-      this.s2 = Math.max(-5, Math.min(5, this.s2));
-      
+      // Outputs
+      const lp = v2;
+      const bp = v1;
+      const hp = v0 - k * v1 - v2;
       const notch = hp + lp;
       
       // Mode select
@@ -128,18 +118,14 @@ class WaspProcessor extends AudioWorkletProcessor {
       else if (mode < 2.5) filtered = hp;
       else filtered = notch;
       
-      // Output with saturation
-      const sat = this.tanh(filtered * (1 + drive * 0.5));
+      // Apply WASP character on output only
+      const driven = filtered * (1 + drive);
+      const shaped = this.cmos(driven, this.bias, drive);
       
-      // DC block
-      const dcBlocked = sat - this.dcPrev + 0.995 * this.dcOut;
-      this.dcPrev = sat;
-      this.dcOut = dcBlocked;
-      
-      out[i] = dcBlocked;
+      out[i] = shaped;
     }
     
-    // Log output level
+    // Log output
     if (this.frameCount === 10 || this.frameCount === 50) {
       const maxOut = Math.max(...Array.from(out).map(Math.abs));
       console.log('Frame', this.frameCount, 'maxOut:', maxOut.toFixed(4));
